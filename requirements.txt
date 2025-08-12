@@ -1,0 +1,8 @@
+streamlit>=1.36
+pandas>=2.2
+matplotlib>=3.8
+numpy>=1.26
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.2
+japanize-matplotlib>=1.1.3
