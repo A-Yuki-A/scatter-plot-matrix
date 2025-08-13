@@ -1,13 +1,13 @@
 # streamlit_app.py
-# とどランURL×3〜4 → 都道府県データ抽出、相関分析（散布図行列のみ：全データ／外れ値除外）
+# とどランURL×3〜4 → 都道府県データ抽出、相関分析（散布図行列のみ）
 # ・割合列も許可（オプション）
 # ・「偏差値」や「順位」列は除外
 # ・グレースケールデザイン／中央寄せ／アクセシビリティ配慮／タイトル余白修正
 # ・AI分析（散布図行列から読み取れる傾向を要約）
 # ・「クリア」ボタンで2つのURLと計算結果をリセット（on_click方式）
-# ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データ／外れ値除外）を描画
+# ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データのみ）を描画
 # ・「結合後のデータ（共通の都道府県のみ）」をCSV保存可能
-# ・※散布図（左右）と外れ値リスト表示は削除しています
+# ・※散布図（左右）／外れ値リスト表示／「散布図行列（外れ値除外）」の表示は削除
 
 import io
 import re
@@ -339,24 +339,41 @@ def clear_urls():
 
 col_calc, col_clear = st.columns([2, 1])
 with col_calc:
-    do_calc = st.button("相関を計算・表示する", key="btn_calc", type="primary")
+    # ★ ボタン名を変更
+    do_calc = st.button("散布図行列を作成する", key="btn_calc", type="primary")
 with col_clear:
     st.button("クリア", key="btn_clear", help="入力中のURLを消去します", on_click=clear_urls)
 
-# ===== 散布図行列 描画関数 =====
-def draw_scatter_matrix(df_vals: pd.DataFrame, labels: List[str], title: str, width_px: int = 860):
+# ===== 散布図行列 描画関数（短縮ラベル A/B/C/D を用いる） =====
+def short_names(n: int) -> List[str]:
+    base = ["A", "B", "C", "D"]
+    return base[:n]
+
+def draw_scatter_matrix_with_mapping(df_vals: pd.DataFrame, orig_labels: List[str],
+                                     title: str, width_px: int = 860):
     if df_vals.shape[1] < 2:
         st.info("散布図行列は2変数以上で表示します。")
         return
-    axes = scatter_matrix(df_vals, diagonal='hist',
+    # 列名を A/B/C/D に置き換えて重なりを回避
+    cols = df_vals.columns.tolist()
+    s_names = short_names(len(cols))
+    df_plot = df_vals.copy()
+    df_plot.columns = s_names
+
+    axes = scatter_matrix(df_plot, diagonal='hist',
                           figsize=(BASE_W_INCH*1.6, BASE_H_INCH*1.6),
                           range_padding=0.15)
-    for i, lab in enumerate(labels):
+    # 軸ラベルに短縮名を設定
+    for i, lab in enumerate(s_names):
         axes[i, 0].set_ylabel(lab)
         axes[-1, i].set_xlabel(lab)
     fig = axes[0, 0].get_figure()
     fig.suptitle(title)
     show_fig(fig, width_px)
+
+    # 図の下に対応表を表示
+    mapping_lines = [f"**{s}** = {o}" for s, o in zip(s_names, orig_labels)]
+    st.markdown("、".join(mapping_lines))
 
 # -------------------- メイン処理（計算実行ボタン） --------------------
 if do_calc:
@@ -419,39 +436,24 @@ if do_calc:
         st.stop()
 
     # ===== 散布図行列用データ（2〜4変数）=====
-    vals = merged[value_cols].apply(pd.to_numeric, errors="coerce")
-    mask_all = vals.notna().all(axis=1)
-    vals_all = vals.loc[mask_all]  # 全データ（欠損のある行は除く）
+    vals_all = merged[value_cols].apply(pd.to_numeric, errors="coerce").dropna(axis=0, how="any")
 
-    # 外れ値除外（各列の IQR で内側にある行のみ）
-    inlier_mask = np.ones(len(vals_all), dtype=bool)
-    for c in vals_all.columns:
-        inlier_mask &= iqr_mask(vals_all[c].to_numpy(), 1.5)
-    vals_in = vals_all.loc[inlier_mask]
+    # ===== 散布図行列（全データのみを表示）=====
+    st.subheader("散布図行列")
+    draw_scatter_matrix_with_mapping(vals_all, labels_all, "散布図行列（A/B/C/D 表記）", width_px=860)
 
-    # ===== 散布図行列（描画）=====
-    st.subheader("散布図行列（全データ）")
-    draw_scatter_matrix(vals_all, labels_all, "散布図行列（外れ値を含む）", width_px=860)
-
-    st.subheader("散布図行列（外れ値除外）")
-    draw_scatter_matrix(vals_in, labels_all, "散布図行列（外れ値除外）", width_px=860)
-
-    # ====== 相関行列（Pearson/Spearman）を事前計算して session_state に格納 ======
+    # ====== 相関行列（Pearson/Spearman）を計算して session_state に格納（AI分析用） ======
     pearson_all = corr_matrix_safe(vals_all)
-    pearson_in  = corr_matrix_safe(vals_in)
     spear_all   = spearman_matrix(vals_all)
 
     st.session_state.calc = {
         "labels": labels_all,
-        "value_cols": value_cols,
         "vals_all": vals_all,
-        "vals_in": vals_in,
         "pearson_all": pearson_all,
-        "pearson_in": pearson_in,
         "spear_all": spear_all
     }
 
-# -------------------- AI分析（散布図行列ベースの傾向要約） --------------------
+# -------------------- AI分析（散布図行列ベースの傾向要約：全データ） --------------------
 ai_disabled = ("calc" not in st.session_state) or (st.session_state.get("calc") is None)
 do_ai = st.button("AI分析", key="btn_ai", disabled=ai_disabled)
 
@@ -468,14 +470,13 @@ def top_pairs_from_matrix(mat: pd.DataFrame, labels: List[str], k: int = 5) -> L
     out.sort(key=lambda x: abs(x[2]), reverse=True)
     return out[:k]
 
-def summarize_global_tendencies(pear_all: pd.DataFrame, pear_in: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
-    """全体傾向・ハブ変数・外れ値依存の有無などを簡潔に要約"""
+def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
+    """全体傾向・ハブ変数などを簡潔に要約（全データのみ）"""
     summary = {}
-    if pear_all.empty or pear_in.empty:
+    if pear_all.empty:
         summary["overall"] = "相関の判定に十分なデータがありません。"
         return summary
 
-    # 全体の符号傾向
     tril_idx = np.tril_indices(len(labels), k=-1)
     arr_all = pear_all.to_numpy()[tril_idx]
     pos_share = np.nanmean(arr_all > 0)
@@ -494,9 +495,9 @@ def summarize_global_tendencies(pear_all: pd.DataFrame, pear_in: pd.DataFrame, l
         for i, a in enumerate(labels):
             cnt = 0
             for j, b in enumerate(labels):
-                if j <= i: 
+                if j <= i:
                     continue
-                r = pear_in.iloc[i, j]
+                r = pear_all.iloc[i, j]
                 if pd.notna(r) and abs(r) >= 0.4:  # 中程度以上
                     cnt += 1
             deg[a] = cnt
@@ -508,74 +509,40 @@ def summarize_global_tendencies(pear_all: pd.DataFrame, pear_in: pd.DataFrame, l
     except Exception:
         pass
 
-    # 外れ値依存（全データ→除外で大きく低下）
-    drop_pairs = []
-    for i in range(len(labels)):
-        for j in range(i+1, len(labels)):
-            r_all = pear_all.iloc[i, j]
-            r_in  = pear_in.iloc[i, j]
-            if pd.notna(r_all) and pd.notna(r_in):
-                if abs(r_all) - abs(r_in) >= 0.15:
-                    drop_pairs.append((labels[i], labels[j]))
-    if drop_pairs:
-        out_msg = "外れ値の影響で**相関が過大**に見えていた可能性のある組み合わせ： " + "、".join([f"{a}×{b}" for a, b in drop_pairs])
-    else:
-        out_msg = "外れ値除外後も関係の強さに**大きな変化は見られません**。"
-
     summary["overall"] = overall
     summary["hub"] = hub_msg
-    summary["outlier_depend"] = out_msg
     return summary
 
 if do_ai and not ai_disabled:
     calc = st.session_state.calc
     labels_all = calc["labels"]
     vals_all   = calc["vals_all"]
-    vals_in    = calc["vals_in"]
     pear_all   = calc["pearson_all"]
-    pear_in    = calc["pearson_in"]
     spear_all  = calc["spear_all"]
 
-    # トップの組み合わせ（全データ／外れ値除外）
     top_all = top_pairs_from_matrix(pear_all, labels_all, k=5)
-    top_in  = top_pairs_from_matrix(pear_in,  labels_all, k=5)
+    summ = summarize_global_tendencies(pear_all, labels_all)
 
-    # 全体傾向サマリー
-    summ = summarize_global_tendencies(pear_all, pear_in, labels_all)
-
-    # === 出力 ===
     st.success("**AI総合コメント（散布図行列の分析）**：全体の関係性を要約しました。")
 
     st.subheader("AI分析（要点）")
     st.markdown(f"""
-- **サンプル数**：全データ **n={len(vals_all)}** ／ 外れ値除外 **n={len(vals_in)}**
+- **サンプル数**：全データ **n={len(vals_all)}**
 - **全体傾向**：{summ.get("overall","")}
 - **ハブ的な変数**：{summ.get("hub","")}
-- **外れ値の影響**：{summ.get("outlier_depend","")}
 """)
 
     def fmt_line(triple):
         a, b, r = triple
         return f"- {a} × {b}： r={r:+.3f}（{strength_label(r)}）"
 
-    st.markdown("#### 強い／目立つ組み合わせ（全データ・上位）")
+    st.markdown("#### 強い／目立つ組み合わせ（上位）")
     if top_all:
         st.markdown("\n".join(fmt_line(t) for t in top_all))
     else:
         st.info("十分な組み合わせがありません。")
 
-    st.markdown("#### 強い／目立つ組み合わせ（外れ値除外・上位）")
-    if top_in:
-        st.markdown("\n".join(fmt_line(t) for t in top_in))
-    else:
-        st.info("十分な組み合わせがありません。")
-
     st.markdown("---")
-    st.markdown(
-        "#### 外れ値の定義（IQR法）\n"
-        "四分位範囲 IQR = Q3 − Q1 とし、**下限 = Q1 − 1.5×IQR、上限 = Q3 + 1.5×IQR** を超える値を外れ値とします。"
-        " 本ツールの「外れ値除外」の散布図行列では、**いずれかの列で外れ値に該当した行**を除いています。"
-    )
     st.markdown(
         "#### スピアマン順位相関とは\n"
         "データの**値そのもの**ではなく、**順位（大小関係）**に置き換えて相関の強さを調べる方法です（記号は ρ）。\n"
