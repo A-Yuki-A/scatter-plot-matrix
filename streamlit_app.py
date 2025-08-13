@@ -488,11 +488,11 @@ if st.session_state.get("calc"):
         width_px=980
     )
 
-# -------------------- AI分析（散布図行列ベースの“具体的”な総合分析 + アドバイス） --------------------
+# -------------------- 結果解説（散布図行列ベースの“具体的”な総合分析 + アドバイス） --------------------
 ai_disabled = ("calc" not in st.session_state) or (st.session_state.get("calc") is None)
 
 # 押すたびに表示をトグルではなく「表示ON」にする（グラフは残す）
-if st.button("AI分析", key="btn_ai", disabled=ai_disabled):
+if st.button("結果解説", key="btn_ai", disabled=ai_disabled):
     st.session_state["show_ai_result"] = True
 
 def pair_list_from_matrix(df: pd.DataFrame, labels: List[str]) -> List[Tuple[str, str, float]]:
