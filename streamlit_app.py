@@ -579,6 +579,7 @@ def make_advice(labels: List[str]) -> List[str]:
     return tips
 
 # ======= 分析結果の表示 =======
+# ======= 分析結果の表示 =======
 if st.session_state.get("show_ai_result") and not ai_disabled:
     labels_all = st.session_state.calc["labels"]
     vals_all   = st.session_state.calc["vals_all"]
@@ -620,8 +621,3 @@ if st.session_state.get("show_ai_result") and not ai_disabled:
         st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in weak))
         st.caption("※ 関係が弱いのは、母数（人口など）の違いや、測っている内容が直接結びつかないためと考えられます。")
 
-    # 追加であると面白いデータの提案
-    st.markdown("---")
-    st.subheader("さらに面白い関係を見るためのデータ提案")
-    for tip in make_advice(labels_all):
-        st.markdown(f"- {tip}")
