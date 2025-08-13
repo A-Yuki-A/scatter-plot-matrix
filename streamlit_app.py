@@ -6,8 +6,8 @@
 # ・AI分析（散布図行列から読み取れる傾向を要約）
 # ・「クリア」ボタンで2つのURLと計算結果をリセット（on_click方式）
 # ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データのみ）を描画
+# ・右端に各変数の箱ひげ図を表示／上三角にrを表示
 # ・「結合後のデータ（共通の都道府県のみ）」をCSV保存可能
-# ・※散布図（左右）／外れ値リスト表示／「散布図行列（外れ値除外）」の表示は削除
 
 import io
 import re
@@ -21,7 +21,6 @@ import requests
 from bs4 import BeautifulSoup
 from pandas.api.types import is_scalar
 from pathlib import Path
-from pandas.plotting import scatter_matrix
 
 # === フォント設定 ===
 fp = Path("fonts/SourceHanCodeJP-Regular.otf")
@@ -62,8 +61,8 @@ plt.rcParams.update({
     "grid.linestyle": "--",
     "grid.alpha": 0.3,
 })
-DEFAULT_MARKER_SIZE = 36
-DEFAULT_LINE_WIDTH = 2.0
+DEFAULT_MARKER_SIZE = 30
+DEFAULT_LINE_WIDTH = 1.8
 
 st.markdown("""
 <style>
@@ -344,36 +343,90 @@ with col_calc:
 with col_clear:
     st.button("クリア", key="btn_clear", help="入力中のURLを消去します", on_click=clear_urls)
 
-# ===== 散布図行列：短縮ラベル A/B/C/D を用いる =====
+# ===== A/B/C/D の短縮ラベル =====
 def short_names(n: int) -> List[str]:
     base = ["A", "B", "C", "D"]
     return base[:n]
 
-def draw_scatter_matrix_with_mapping(df_vals: pd.DataFrame, orig_labels: List[str],
-                                     title: str, width_px: int = 860):
+# ===== 散布図行列 + 右端箱ひげ + 上三角r 表示 =====
+def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
+                               title: str, width_px: int = 980):
+    """
+    n行 × (n+1)列のグリッドを作り、左n×nが散布図行列（対角はヒスト）、
+    右端（列n）は各行の変数の箱ひげ図を縦に配置。
+    上三角（i<j）の散布図内に Pearson r を表示。
+    軸ラベルは A/B/C/D の短縮表記。下に対応表を別表示。
+    """
     if df_vals.shape[1] < 2:
         st.info("散布図行列は2変数以上で表示します。")
         return
-    # 列名を A/B/C/D に置き換えて重なりを回避
-    cols = df_vals.columns.tolist()
-    s_names = short_names(len(cols))
-    df_plot = df_vals.copy()
-    df_plot.columns = s_names
 
-    axes = scatter_matrix(df_plot, diagonal='hist',
-                          figsize=(BASE_W_INCH*1.6, BASE_H_INCH*1.6),
-                          range_padding=0.15)
-    # 軸ラベルに短縮名を設定
-    for i, lab in enumerate(s_names):
-        axes[i, 0].set_ylabel(lab)
-        axes[-1, i].set_xlabel(lab)
-    fig = axes[0, 0].get_figure()
+    cols = df_vals.columns.tolist()
+    n = len(cols)
+    s_names = short_names(n)
+
+    # Figure を n x (n+1) で作成
+    # 横に1列分（箱ひげ）を追加するため幅を少し広げる
+    fig, axes = plt.subplots(nrows=n, ncols=n+1,
+                             figsize=(BASE_W_INCH*1.8, BASE_H_INCH*1.8),
+                             squeeze=False)
     fig.suptitle(title)
+
+    # 散布図行列（左ブロック）
+    for i in range(n):           # row: y
+        yi = df_vals.iloc[:, i]
+        for j in range(n):       # col: x
+            ax = axes[i, j]
+            xi = df_vals.iloc[:, j]
+
+            # 対角：ヒストグラム
+            if i == j:
+                ax.hist(yi.dropna().values, bins=10, edgecolor="black")
+            else:
+                # 散布図
+                mask = xi.notna() & yi.notna()
+                ax.scatter(xi[mask].values, yi[mask].values, s=DEFAULT_MARKER_SIZE, alpha=0.9)
+
+                # 上三角に r を注記
+                if i < j and mask.sum() >= 2:
+                    xv = xi[mask].values
+                    yv = yi[mask].values
+                    if np.nanstd(xv) > 0 and np.nanstd(yv) > 0:
+                        r = float(np.corrcoef(xv, yv)[0, 1])
+                        ax.text(0.05, 0.88, f"r={r:+.3f}",
+                                transform=ax.transAxes, fontsize=11,
+                                ha="left", va="center",
+                                bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="black", alpha=0.7))
+
+            # 目盛の整理：内部はラベル非表示でスッキリ
+            if i < n-1:
+                ax.set_xticklabels([])
+            if j > 0:
+                ax.set_yticklabels([])
+
+            # 端だけ短縮ラベルを表示
+            if j == 0:
+                ax.set_ylabel(s_names[i])
+            if i == n-1:
+                ax.set_xlabel(s_names[j])
+
+    # 右端：各行の変数の箱ひげ図（縦）
+    for i in range(n):
+        bx = axes[i, n]
+        yi = df_vals.iloc[:, i].dropna().values
+        if yi.size > 0:
+            bx.boxplot(yi, vert=True, widths=0.6)
+        bx.set_xticks([])
+        if i < n-1:
+            bx.set_xticklabels([])
+        # y目盛は残す（分布感が分かるように）
+        if i == 0:
+            bx.set_title("箱ひげ")
+
+    plt.tight_layout()
     show_fig(fig, width_px)
 
-def show_abcd_mapping(orig_labels: List[str]):
-    """ABCD を縦に並べて、その右に項目名を表示する2列表"""
-    s_names = short_names(len(orig_labels))
+    # 図下に A/B/C/D 対応表（縦並び2列）
     mapping_df = pd.DataFrame({"記号": s_names, "項目名": orig_labels})
     st.table(mapping_df)
 
@@ -440,11 +493,9 @@ if do_calc:
     # ===== 散布図行列用データ（2〜4変数）=====
     vals_all = merged[value_cols].apply(pd.to_numeric, errors="coerce").dropna(axis=0, how="any")
 
-    # ===== 散布図行列（全データのみを表示）=====
-    st.subheader("散布図行列")
-    draw_scatter_matrix_with_mapping(vals_all, labels_all, "散布図行列（A/B/C/D 表記）", width_px=860)
-    # ★ 図の下に A〜D 対応表（縦並び2列）
-    show_abcd_mapping(labels_all)
+    # ===== 散布図行列（右端に箱ひげ／上三角にr） =====
+    st.subheader("散布図行列（右端に箱ひげ図・上三角に r）")
+    draw_matrix_with_box_and_r(vals_all, labels_all, "散布図行列（A/B/C/D 表記）", width_px=980)
 
     # ====== 相関行列（Pearson/Spearman）を計算して session_state に格納（AI分析用） ======
     pearson_all = corr_matrix_safe(vals_all)
@@ -545,9 +596,12 @@ if do_ai and not ai_disabled:
 - **ハブ的な変数**：{summ.get("hub","")}
 """)
 
+    def strength_tag(r: float) -> str:
+        return f"{strength_label(r)}"
+
     def fmt_pair(a: str, b: str, r: float) -> str:
         sa, sb = to_short.get(a, a), to_short.get(b, b)
-        return f"- {sa}（{a}） × {sb}（{b}）： r={r:+.3f}（{strength_label(r)}）"
+        return f"- {sa}（{a}） × {sb}（{b}）： r={r:+.3f}（{strength_tag(r)}）"
 
     st.markdown("#### 強い／目立つ組み合わせ（上位）")
     if top_all:
