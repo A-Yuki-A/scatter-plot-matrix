@@ -344,7 +344,7 @@ with col_calc:
 with col_clear:
     st.button("クリア", key="btn_clear", help="入力中のURLを消去します", on_click=clear_urls)
 
-# ===== 散布図行列 描画関数（短縮ラベル A/B/C/D を用いる） =====
+# ===== 散布図行列：短縮ラベル A/B/C/D を用いる =====
 def short_names(n: int) -> List[str]:
     base = ["A", "B", "C", "D"]
     return base[:n]
@@ -371,11 +371,13 @@ def draw_scatter_matrix_with_mapping(df_vals: pd.DataFrame, orig_labels: List[st
     fig.suptitle(title)
     show_fig(fig, width_px)
 
-    # 図の下に対応表を表示
-    mapping_lines = [f"**{s}** = {o}" for s, o in zip(s_names, orig_labels)]
-    st.markdown("、".join(mapping_lines))
+def show_abcd_mapping(orig_labels: List[str]):
+    """ABCD を縦に並べて、その右に項目名を表示する2列表"""
+    s_names = short_names(len(orig_labels))
+    mapping_df = pd.DataFrame({"記号": s_names, "項目名": orig_labels})
+    st.table(mapping_df)
 
-# -------------------- メイン処理（計算実行ボタン） --------------------
+# -------------------- メイン処理（散布図行列の作成） --------------------
 if do_calc:
     if not url_a or not url_b:
         st.error("少なくとも2つのURLを入力してください。")
@@ -441,6 +443,8 @@ if do_calc:
     # ===== 散布図行列（全データのみを表示）=====
     st.subheader("散布図行列")
     draw_scatter_matrix_with_mapping(vals_all, labels_all, "散布図行列（A/B/C/D 表記）", width_px=860)
+    # ★ 図の下に A〜D 対応表（縦並び2列）
+    show_abcd_mapping(labels_all)
 
     # ====== 相関行列（Pearson/Spearman）を計算して session_state に格納（AI分析用） ======
     pearson_all = corr_matrix_safe(vals_all)
@@ -453,27 +457,29 @@ if do_calc:
         "spear_all": spear_all
     }
 
-# -------------------- AI分析（散布図行列ベースの傾向要約：全データ） --------------------
+# -------------------- AI分析（散布図行列ベースの総合分析） --------------------
 ai_disabled = ("calc" not in st.session_state) or (st.session_state.get("calc") is None)
 do_ai = st.button("AI分析", key="btn_ai", disabled=ai_disabled)
 
-def top_pairs_from_matrix(mat: pd.DataFrame, labels: List[str], k: int = 5) -> List[Tuple[str, str, float]]:
+def pair_list_from_matrix(mat: pd.DataFrame, labels: List[str]) -> List[Tuple[str, str, float]]:
+    """上三角の相関ペアを [(label_i, label_j, r), ...] で返す"""
     out = []
     if mat.empty:
         return out
-    cols = list(mat.columns)
-    for i in range(len(cols)):
-        for j in range(i+1, len(cols)):
+    for i in range(len(labels)):
+        for j in range(i+1, len(labels)):
             r = mat.iloc[i, j]
             if pd.notna(r):
                 out.append((labels[i], labels[j], float(r)))
-    out.sort(key=lambda x: abs(x[2]), reverse=True)
-    return out[:k]
+    return out
+
+def top_pairs(pairs: List[Tuple[str, str, float]], k: int = 5) -> List[Tuple[str, str, float]]:
+    return sorted(pairs, key=lambda x: abs(x[2]), reverse=True)[:k]
 
 def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
     """全体傾向・ハブ変数などを簡潔に要約（全データのみ）"""
     summary = {}
-    if pear_all.empty:
+    if pear_all.empty or len(labels) < 2:
         summary["overall"] = "相関の判定に十分なデータがありません。"
         return summary
 
@@ -494,7 +500,7 @@ def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Di
         deg = {}
         for i, a in enumerate(labels):
             cnt = 0
-            for j, b in enumerate(labels):
+            for j in range(len(labels)):
                 if j <= i:
                     continue
                 r = pear_all.iloc[i, j]
@@ -513,6 +519,11 @@ def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Di
     summary["hub"] = hub_msg
     return summary
 
+def short_label_map(orig_labels: List[str]) -> Dict[str, str]:
+    """元ラベル -> A/B/C/D の対応辞書を返す"""
+    shorts = short_names(len(orig_labels))
+    return {orig: s for orig, s in zip(orig_labels, shorts)}
+
 if do_ai and not ai_disabled:
     calc = st.session_state.calc
     labels_all = calc["labels"]
@@ -520,8 +531,10 @@ if do_ai and not ai_disabled:
     pear_all   = calc["pearson_all"]
     spear_all  = calc["spear_all"]
 
-    top_all = top_pairs_from_matrix(pear_all, labels_all, k=5)
+    pairs = pair_list_from_matrix(pear_all, labels_all)
+    top_all = top_pairs(pairs, k=5)
     summ = summarize_global_tendencies(pear_all, labels_all)
+    to_short = short_label_map(labels_all)
 
     st.success("**AI総合コメント（散布図行列の分析）**：全体の関係性を要約しました。")
 
@@ -532,13 +545,13 @@ if do_ai and not ai_disabled:
 - **ハブ的な変数**：{summ.get("hub","")}
 """)
 
-    def fmt_line(triple):
-        a, b, r = triple
-        return f"- {a} × {b}： r={r:+.3f}（{strength_label(r)}）"
+    def fmt_pair(a: str, b: str, r: float) -> str:
+        sa, sb = to_short.get(a, a), to_short.get(b, b)
+        return f"- {sa}（{a}） × {sb}（{b}）： r={r:+.3f}（{strength_label(r)}）"
 
     st.markdown("#### 強い／目立つ組み合わせ（上位）")
     if top_all:
-        st.markdown("\n".join(fmt_line(t) for t in top_all))
+        st.markdown("\n".join(fmt_pair(a, b, r) for a, b, r in top_all))
     else:
         st.info("十分な組み合わせがありません。")
 
