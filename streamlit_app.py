@@ -61,8 +61,8 @@ plt.rcParams.update({
     "grid.linestyle": "--",
     "grid.alpha": 0.3,
 })
-DEFAULT_MARKER_SIZE = 30
-DEFAULT_LINE_WIDTH = 1.8
+DEFAULT_MARKER_SIZE = 28
+DEFAULT_LINE_WIDTH = 1.6
 
 st.markdown("""
 <style>
@@ -144,16 +144,6 @@ def to_number(x) -> float:
     except Exception:
         return np.nan
 
-def iqr_mask(arr: np.ndarray, k: float = 1.5) -> np.ndarray:
-    if arr.size == 0:
-        return np.array([], dtype=bool)
-    q1 = np.nanpercentile(arr, 25)
-    q3 = np.nanpercentile(arr, 75)
-    iqr = q3 - q1
-    lo = q1 - k * iqr
-    hi = q3 + k * iqr
-    return (arr >= lo) & (arr <= hi)
-
 def flatten_columns(cols):
     def _normalize(c: str) -> str:
         return re.sub(r"\s+", "", str(c).strip())
@@ -211,19 +201,12 @@ def corr_matrix_safe(df: pd.DataFrame) -> pd.DataFrame:
     ok = df.dropna(axis=0, how="any")
     if ok.shape[0] < 2:
         return pd.DataFrame(index=df.columns, columns=df.columns, dtype=float)
-    # 分散0列はNaN列に
     std = ok.std(axis=0, ddof=0)
     safe = ok.copy()
     zero_cols = std[std == 0].index.tolist()
     for c in zero_cols:
         safe[c] = np.nan
     return safe.corr(method="pearson")
-
-def spearman_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or df.shape[1] < 2:
-        return pd.DataFrame(index=df.columns, columns=df.columns, dtype=float)
-    ranks = df.rank(method="average", na_option="keep")
-    return corr_matrix_safe(ranks)
 
 # -------------------- URL読み込み --------------------
 @st.cache_data(show_spinner=False)
@@ -348,14 +331,13 @@ def short_names(n: int) -> List[str]:
     base = ["A", "B", "C", "D"]
     return base[:n]
 
-# ===== 散布図行列 + 右端箱ひげ + 上三角r 表示 =====
+# ===== 散布図行列 + 右端箱ひげ + 上三角r（間隔を狭める） =====
 def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
                                title: str, width_px: int = 980):
     """
-    n行 × (n+1)列のグリッドを作り、左n×nが散布図行列（対角はヒスト）、
-    右端（列n）は各行の変数の箱ひげ図を縦に配置。
-    上三角（i<j）の散布図内に Pearson r を表示。
-    軸ラベルは A/B/C/D の短縮表記。下に対応表を別表示。
+    n行 × (n+1)列のグリッド：左n×nが散布図行列（対角はヒスト）、
+    右端（列n）は各行の箱ひげ図。上三角にPearson rを表示。
+    軸ラベルは A/B/C/D。図下に対応表を表示。
     """
     if df_vals.shape[1] < 2:
         st.info("散布図行列は2変数以上で表示します。")
@@ -365,29 +347,22 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
     n = len(cols)
     s_names = short_names(n)
 
-    # Figure を n x (n+1) で作成
-    # 横に1列分（箱ひげ）を追加するため幅を少し広げる
     fig, axes = plt.subplots(nrows=n, ncols=n+1,
                              figsize=(BASE_W_INCH*1.8, BASE_H_INCH*1.8),
                              squeeze=False)
     fig.suptitle(title)
 
-    # 散布図行列（左ブロック）
     for i in range(n):           # row: y
         yi = df_vals.iloc[:, i]
         for j in range(n):       # col: x
             ax = axes[i, j]
             xi = df_vals.iloc[:, j]
 
-            # 対角：ヒストグラム
             if i == j:
                 ax.hist(yi.dropna().values, bins=10, edgecolor="black")
             else:
-                # 散布図
                 mask = xi.notna() & yi.notna()
                 ax.scatter(xi[mask].values, yi[mask].values, s=DEFAULT_MARKER_SIZE, alpha=0.9)
-
-                # 上三角に r を注記
                 if i < j and mask.sum() >= 2:
                     xv = xi[mask].values
                     yv = yi[mask].values
@@ -398,19 +373,17 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
                                 ha="left", va="center",
                                 bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="black", alpha=0.7))
 
-            # 目盛の整理：内部はラベル非表示でスッキリ
+            # 余白・ラベル
             if i < n-1:
                 ax.set_xticklabels([])
             if j > 0:
                 ax.set_yticklabels([])
-
-            # 端だけ短縮ラベルを表示
             if j == 0:
                 ax.set_ylabel(s_names[i])
             if i == n-1:
                 ax.set_xlabel(s_names[j])
 
-    # 右端：各行の変数の箱ひげ図（縦）
+    # 右端：箱ひげ図
     for i in range(n):
         bx = axes[i, n]
         yi = df_vals.iloc[:, i].dropna().values
@@ -419,18 +392,19 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
         bx.set_xticks([])
         if i < n-1:
             bx.set_xticklabels([])
-        # y目盛は残す（分布感が分かるように）
         if i == 0:
             bx.set_title("箱ひげ")
 
-    plt.tight_layout()
+    # ★ 間隔を狭める
+    fig.subplots_adjust(left=0.07, right=0.97, top=0.92, bottom=0.08, wspace=0.06, hspace=0.06)
+
     show_fig(fig, width_px)
 
-    # 図下に A/B/C/D 対応表（縦並び2列）
+    # A〜D 対応表（縦並び2列）
     mapping_df = pd.DataFrame({"記号": s_names, "項目名": orig_labels})
     st.table(mapping_df)
 
-# -------------------- メイン処理（散布図行列の作成） --------------------
+# ========== 散布図行列の作成（計算） ==========
 if do_calc:
     if not url_a or not url_b:
         st.error("少なくとも2つのURLを入力してください。")
@@ -490,33 +464,36 @@ if do_calc:
         st.session_state.calc = None
         st.stop()
 
-    # ===== 散布図行列用データ（2〜4変数）=====
+    # 散布図行列用データ
     vals_all = merged[value_cols].apply(pd.to_numeric, errors="coerce").dropna(axis=0, how="any")
 
-    # ===== 散布図行列（右端に箱ひげ／上三角にr） =====
-    st.subheader("散布図行列（右端に箱ひげ図・上三角に r）")
-    draw_matrix_with_box_and_r(vals_all, labels_all, "散布図行列（A/B/C/D 表記）", width_px=980)
-
-    # ====== 相関行列（Pearson/Spearman）を計算して session_state に格納（AI分析用） ======
-    pearson_all = corr_matrix_safe(vals_all)
-    spear_all   = spearman_matrix(vals_all)
-
+    # セッションに保存（AI分析・再描画用）
     st.session_state.calc = {
         "labels": labels_all,
-        "vals_all": vals_all,
-        "pearson_all": pearson_all,
-        "spear_all": spear_all
+        "vals_all": vals_all
     }
+
+# ========== ここで「常に」散布図行列を表示 ==========
+# → AI分析ボタンを押しても消えない（セッションにあるデータで再描画）
+if st.session_state.get("calc"):
+    st.subheader("散布図行列（右端に箱ひげ図・上三角に r）")
+    draw_matrix_with_box_and_r(
+        st.session_state.calc["vals_all"],
+        st.session_state.calc["labels"],
+        "散布図行列（A/B/C/D 表記）",
+        width_px=980
+    )
 
 # -------------------- AI分析（散布図行列ベースの総合分析） --------------------
 ai_disabled = ("calc" not in st.session_state) or (st.session_state.get("calc") is None)
 do_ai = st.button("AI分析", key="btn_ai", disabled=ai_disabled)
 
-def pair_list_from_matrix(mat: pd.DataFrame, labels: List[str]) -> List[Tuple[str, str, float]]:
-    """上三角の相関ペアを [(label_i, label_j, r), ...] で返す"""
+def pair_list_from_matrix(df: pd.DataFrame, labels: List[str]) -> List[Tuple[str, str, float]]:
+    """Pearson相関の上三角ペア [(label_i, label_j, r), ...] を返す"""
+    if df.shape[1] < 2:
+        return []
+    mat = corr_matrix_safe(df)
     out = []
-    if mat.empty:
-        return out
     for i in range(len(labels)):
         for j in range(i+1, len(labels)):
             r = mat.iloc[i, j]
@@ -527,15 +504,16 @@ def pair_list_from_matrix(mat: pd.DataFrame, labels: List[str]) -> List[Tuple[st
 def top_pairs(pairs: List[Tuple[str, str, float]], k: int = 5) -> List[Tuple[str, str, float]]:
     return sorted(pairs, key=lambda x: abs(x[2]), reverse=True)[:k]
 
-def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
+def summarize_global_tendencies(df: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
     """全体傾向・ハブ変数などを簡潔に要約（全データのみ）"""
+    mat = corr_matrix_safe(df)
     summary = {}
-    if pear_all.empty or len(labels) < 2:
+    if mat.empty or len(labels) < 2:
         summary["overall"] = "相関の判定に十分なデータがありません。"
         return summary
 
     tril_idx = np.tril_indices(len(labels), k=-1)
-    arr_all = pear_all.to_numpy()[tril_idx]
+    arr_all = mat.to_numpy()[tril_idx]
     pos_share = np.nanmean(arr_all > 0)
     neg_share = np.nanmean(arr_all < 0)
     if pos_share >= 0.65:
@@ -554,7 +532,7 @@ def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Di
             for j in range(len(labels)):
                 if j <= i:
                     continue
-                r = pear_all.iloc[i, j]
+                r = mat.iloc[i, j]
                 if pd.notna(r) and abs(r) >= 0.4:  # 中程度以上
                     cnt += 1
             deg[a] = cnt
@@ -571,20 +549,16 @@ def summarize_global_tendencies(pear_all: pd.DataFrame, labels: List[str]) -> Di
     return summary
 
 def short_label_map(orig_labels: List[str]) -> Dict[str, str]:
-    """元ラベル -> A/B/C/D の対応辞書を返す"""
     shorts = short_names(len(orig_labels))
     return {orig: s for orig, s in zip(orig_labels, shorts)}
 
 if do_ai and not ai_disabled:
-    calc = st.session_state.calc
-    labels_all = calc["labels"]
-    vals_all   = calc["vals_all"]
-    pear_all   = calc["pearson_all"]
-    spear_all  = calc["spear_all"]
+    labels_all = st.session_state.calc["labels"]
+    vals_all   = st.session_state.calc["vals_all"]
 
-    pairs = pair_list_from_matrix(pear_all, labels_all)
+    pairs = pair_list_from_matrix(vals_all, labels_all)
     top_all = top_pairs(pairs, k=5)
-    summ = summarize_global_tendencies(pear_all, labels_all)
+    summ = summarize_global_tendencies(vals_all, labels_all)
     to_short = short_label_map(labels_all)
 
     st.success("**AI総合コメント（散布図行列の分析）**：全体の関係性を要約しました。")
@@ -596,25 +570,13 @@ if do_ai and not ai_disabled:
 - **ハブ的な変数**：{summ.get("hub","")}
 """)
 
-    def strength_tag(r: float) -> str:
-        return f"{strength_label(r)}"
-
     def fmt_pair(a: str, b: str, r: float) -> str:
         sa, sb = to_short.get(a, a), to_short.get(b, b)
-        return f"- {sa}（{a}） × {sb}（{b}）： r={r:+.3f}（{strength_tag(r)}）"
+        tag = strength_label(r)
+        return f"- {sa}（{a}） × {sb}（{b}）： r={r:+.3f}（{tag}）"
 
     st.markdown("#### 強い／目立つ組み合わせ（上位）")
     if top_all:
         st.markdown("\n".join(fmt_pair(a, b, r) for a, b, r in top_all))
     else:
         st.info("十分な組み合わせがありません。")
-
-    st.markdown("---")
-    st.markdown(
-        "#### スピアマン順位相関とは\n"
-        "データの**値そのもの**ではなく、**順位（大小関係）**に置き換えて相関の強さを調べる方法です（記号は ρ）。\n"
-        "- **外れ値の影響を受けにくい**、分布が歪んでいても使いやすい。\n"
-        "- 直線関係でなくても、**単調な関係**を捉えられます。\n"
-        "- 値の範囲は **−1 〜 +1**（±1 に近いほど関係が強い）。\n"
-        "**例**：国語と数学で生徒の順位がほぼ同じなら ρ は高くなります。"
-    )
