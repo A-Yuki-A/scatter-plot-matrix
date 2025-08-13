@@ -597,7 +597,7 @@ if st.session_state.get("show_ai_result") and not ai_disabled:
     summ = summarize_global_tendencies(vals_all, labels_all)
 
     # ===== 出力 =====
-    st.success("**AI総合分析結果**：散布図行列を総合的に読み取り、具体的な傾向を示します。")
+    st.success("**結果解説**：散布図行列を総合的に読み取り、具体的な傾向を示します。")
 
     st.markdown(f"- **サンプル数**：n = {len(vals_all)}")
     st.markdown(f"- **全体傾向**：{summ.get('overall','')}")
