@@ -3,10 +3,10 @@
 # ・割合列も許可（オプション）
 # ・「偏差値」や「順位」列は除外
 # ・グレースケールデザイン／中央寄せ／アクセシビリティ配慮／タイトル余白修正
-# ・AI分析（散布図行列から読み取れる傾向を要約）
+# ・AI分析（散布図行列から読み取れる傾向を具体的に記述／追加であると良いデータも提案）
 # ・「クリア」ボタンで2つのURLと計算結果をリセット（on_click方式）
 # ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データのみ）を描画
-# ・右端に各変数の箱ひげ図を表示／上三角にrを表示
+# ・右端に各変数の箱ひげ図を表示／上三角に r を表示（間隔は狭め）
 # ・「結合後のデータ（共通の都道府県のみ）」をCSV保存可能
 
 import io
@@ -120,6 +120,8 @@ if "url_a" not in st.session_state:
     st.session_state["url_a"] = ""
 if "url_b" not in st.session_state:
     st.session_state["url_b"] = ""
+if "show_ai_result" not in st.session_state:
+    st.session_state["show_ai_result"] = False  # 分析結果の表示制御
 
 # -------------------- ユーティリティ --------------------
 def show_fig(fig, width_px: int):
@@ -195,7 +197,7 @@ def strength_label(r: float) -> str:
     return "ほとんどない"
 
 def corr_matrix_safe(df: pd.DataFrame) -> pd.DataFrame:
-    """NaNを落としたうえで、列の分散が0のときはNaNにする相関行列（ピアソン）"""
+    """NaN行を落とし、分散0列はNaN扱いにした相関行列（ピアソン）"""
     if df.empty or df.shape[1] < 2:
         return pd.DataFrame(index=df.columns, columns=df.columns, dtype=float)
     ok = df.dropna(axis=0, how="any")
@@ -317,6 +319,7 @@ def clear_urls():
     st.session_state["url_a"] = ""
     st.session_state["url_b"] = ""
     st.session_state.pop("calc", None)
+    st.session_state["show_ai_result"] = False
     st.rerun()
 
 col_calc, col_clear = st.columns([2, 1])
@@ -337,7 +340,7 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
     """
     n行 × (n+1)列のグリッド：左n×nが散布図行列（対角はヒスト）、
     右端（列n）は各行の箱ひげ図。上三角にPearson rを表示。
-    軸ラベルは A/B/C/D。図下に対応表を表示。
+    軸ラベルは A/B/C/D。図下に対応表を表示。間隔は詰める。
     """
     if df_vals.shape[1] < 2:
         st.info("散布図行列は2変数以上で表示します。")
@@ -373,7 +376,7 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
                                 ha="left", va="center",
                                 bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="black", alpha=0.7))
 
-            # 余白・ラベル
+            # 余白・ラベルの整理
             if i < n-1:
                 ax.set_xticklabels([])
             if j > 0:
@@ -396,7 +399,7 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
             bx.set_title("箱ひげ")
 
     # ★ 間隔を狭める
-    fig.subplots_adjust(left=0.07, right=0.97, top=0.92, bottom=0.08, wspace=0.06, hspace=0.06)
+    fig.subplots_adjust(left=0.07, right=0.97, top=0.90, bottom=0.08, wspace=0.06, hspace=0.06)
 
     show_fig(fig, width_px)
 
@@ -406,6 +409,7 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
 
 # ========== 散布図行列の作成（計算） ==========
 if do_calc:
+    st.session_state["show_ai_result"] = False  # 新規作成時は分析表示を一旦オフ
     if not url_a or not url_b:
         st.error("少なくとも2つのURLを入力してください。")
         st.stop()
@@ -484,9 +488,12 @@ if st.session_state.get("calc"):
         width_px=980
     )
 
-# -------------------- AI分析（散布図行列ベースの総合分析） --------------------
+# -------------------- AI分析（散布図行列ベースの“具体的”な総合分析 + アドバイス） --------------------
 ai_disabled = ("calc" not in st.session_state) or (st.session_state.get("calc") is None)
-do_ai = st.button("AI分析", key="btn_ai", disabled=ai_disabled)
+
+# 押すたびに表示をトグルではなく「表示ON」にする（グラフは残す）
+if st.button("AI分析", key="btn_ai", disabled=ai_disabled):
+    st.session_state["show_ai_result"] = True
 
 def pair_list_from_matrix(df: pd.DataFrame, labels: List[str]) -> List[Tuple[str, str, float]]:
     """Pearson相関の上三角ペア [(label_i, label_j, r), ...] を返す"""
@@ -552,31 +559,69 @@ def short_label_map(orig_labels: List[str]) -> Dict[str, str]:
     shorts = short_names(len(orig_labels))
     return {orig: s for orig, s in zip(orig_labels, shorts)}
 
-if do_ai and not ai_disabled:
+def interpret_pair(a: str, b: str, r: float) -> str:
+    """高校生向けに具体的な読み取り文を付ける"""
+    trend = "一緒に増える傾向" if r > 0 else "片方が増えるともう片方が減る傾向"
+    strength = strength_label(r)
+    return f"- {a} と {b}： r={r:+.3f}（{strength}）。おおまかに見ると**{trend}**が見られます。"
+
+def make_advice(labels: List[str]) -> List[str]:
+    """さらに面白い関係を探すための追加データの提案（教育・ICT・進学・運動文脈）"""
+    tips = [
+        "家庭の**可処分所得**や**教育支出**：学習率や合格者数と関係が強まるかもしれません。",
+        "**学習塾通塾率**・**オンライン学習利用率**：学校外学習率（A）との関連が詳しく見られます。",
+        "**端末の世帯普及状況**（家庭内PC・タブレット）と**ネット回線速度**：スマホ所有率（B）と学習率（A）の違いを説明できる可能性。",
+        "**在籍者数（母数）**や**高校卒業者数**：合格者数（C）の規模効果（人口が多いほど合格者が多い）を補正して比較できます。",
+        "**体育・運動環境の整備指標**（施設数、1人あたり運動場所面積、部活動の活動時間）：" \
+        "運動部参加率（D）の地域差の背景を探れます。",
+        "**通学時間**や**都市度指標（人口密度、都市圏ダミー）**：A/B/Dに共通して効く地域要因を切り分けられます。"
+    ]
+    return tips
+
+# ======= 分析結果の表示 =======
+if st.session_state.get("show_ai_result") and not ai_disabled:
     labels_all = st.session_state.calc["labels"]
     vals_all   = st.session_state.calc["vals_all"]
 
+    # 相関ペア抽出
     pairs = pair_list_from_matrix(vals_all, labels_all)
-    top_all = top_pairs(pairs, k=5)
-    summ = summarize_global_tendencies(vals_all, labels_all)
     to_short = short_label_map(labels_all)
 
-    st.success("**AI総合コメント（散布図行列の分析）**：全体の関係性を要約しました。")
+    # 上位の強い/弱い組み合わせ
+    pairs_sorted = sorted(pairs, key=lambda x: abs(x[2]), reverse=True)
+    strong = [p for p in pairs_sorted if abs(p[2]) >= 0.7][:5]
+    medium = [p for p in pairs_sorted if 0.4 <= abs(p[2]) < 0.7][:5]
+    weak   = [p for p in pairs_sorted if abs(p[2]) < 0.2][:5]
 
-    st.subheader("AI分析（要点）")
-    st.markdown(f"""
-- **サンプル数**：全データ **n={len(vals_all)}**
-- **全体傾向**：{summ.get("overall","")}
-- **ハブ的な変数**：{summ.get("hub","")}
-""")
+    # 全体傾向・ハブ
+    summ = summarize_global_tendencies(vals_all, labels_all)
 
-    def fmt_pair(a: str, b: str, r: float) -> str:
+    # ===== 出力 =====
+    st.success("**AI総合分析結果**：散布図行列を総合的に読み取り、具体的な傾向を示します。")
+
+    st.markdown(f"- **サンプル数**：n = {len(vals_all)}")
+    st.markdown(f"- **全体傾向**：{summ.get('overall','')}")
+    st.markdown(f"- **ハブ的な変数**：{summ.get('hub','')}")
+
+    def fmt_with_short(a, b, r):
         sa, sb = to_short.get(a, a), to_short.get(b, b)
-        tag = strength_label(r)
-        return f"- {sa}（{a}） × {sb}（{b}）： r={r:+.3f}（{tag}）"
+        return f"{sa}（{a}） × {sb}（{b}） / r={r:+.3f}"
 
-    st.markdown("#### 強い／目立つ組み合わせ（上位）")
-    if top_all:
-        st.markdown("\n".join(fmt_pair(a, b, r) for a, b, r in top_all))
-    else:
-        st.info("十分な組み合わせがありません。")
+    if strong:
+        st.markdown("### 目立って**強い**関係（例）")
+        st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in strong))
+        st.markdown("\n".join(interpret_pair(a,b,r) for a,b,r in strong))
+    if medium:
+        st.markdown("### **中程度**の関係（例）")
+        st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in medium))
+        st.caption("※ 中程度は、他の要因の影響も考えられるので、追加データで裏取りすると良いです。")
+    if weak:
+        st.markdown("### **ほとんど関係がない**組み合わせ（例）")
+        st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in weak))
+        st.caption("※ 関係が弱いのは、母数（人口など）の違いや、測っている内容が直接結びつかないためと考えられます。")
+
+    # 追加であると面白いデータの提案
+    st.markdown("---")
+    st.subheader("さらに面白い関係を見るためのデータ提案")
+    for tip in make_advice(labels_all):
+        st.markdown(f"- {tip}")
