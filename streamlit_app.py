@@ -1,18 +1,17 @@
 # streamlit_app.py
-# とどランURL×3〜4 → 都道府県データ抽出、相関分析（外れ値あり／なし散布図）＋散布図行列
+# とどランURL×3〜4 → 都道府県データ抽出、相関分析（散布図行列のみ：全データ／外れ値除外）
 # ・割合列も許可（オプション）
 # ・「偏差値」や「順位」列は除外
-# ・外れ値は「X軸で外れ値」「Y軸で外れ値」のみ横並び2カラム表示
 # ・グレースケールデザイン／中央寄せ／アクセシビリティ配慮／タイトル余白修正
-# ・AI分析（計算結果をSessionに保存→ボタン外置き）
+# ・AI分析（散布図行列から読み取れる傾向を要約）
 # ・「クリア」ボタンで2つのURLと計算結果をリセット（on_click方式）
 # ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データ／外れ値除外）を描画
 # ・「結合後のデータ（共通の都道府県のみ）」をCSV保存可能
-# ・外れ値リストのCSV保存ボタンは表示しない（表示のみ）
+# ・※散布図（左右）と外れ値リスト表示は削除しています
 
 import io
 import re
-from typing import List
+from typing import List, Tuple, Dict
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -104,7 +103,6 @@ a, a:visited { color: #000 !important; text-decoration: underline !important; }
 # -------------------- 定数 --------------------
 BASE_W_INCH, BASE_H_INCH = 6.4, 4.8
 EXPORT_DPI = 200
-SCATTER_WIDTH_PX = 480
 
 PREFS = ["北海道","青森県","岩手県","宮城県","秋田県","山形県","福島県","茨城県","栃木県","群馬県",
     "埼玉県","千葉県","東京都","神奈川県","新潟県","富山県","石川県","福井県","山梨県","長野県",
@@ -157,34 +155,6 @@ def iqr_mask(arr: np.ndarray, k: float = 1.5) -> np.ndarray:
     hi = q3 + k * iqr
     return (arr >= lo) & (arr <= hi)
 
-def fmt(v: float) -> str:
-    return "-" if (v is None or not np.isfinite(v)) else f"{v:.4f}"
-
-def draw_scatter_reg_with_metrics(x, y, la, lb, title, width_px):
-    fig, ax = plt.subplots(figsize=(BASE_W_INCH, BASE_H_INCH))
-    ax.scatter(x, y, label="データ点", s=DEFAULT_MARKER_SIZE)
-    r = r2 = None
-    varx = float(np.nanstd(x)) if len(x) else 0.0
-    vary = float(np.nanstd(y)) if len(y) else 0.0
-    if len(x) >= 2:
-        if varx > 0:
-            slope, intercept = np.polyfit(x, y, 1)
-            xs = np.linspace(x.min(), x.max(), 200)
-            ax.plot(xs, slope * xs + intercept, label="回帰直線", linewidth=DEFAULT_LINE_WIDTH)
-        if varx > 0 and vary > 0:
-            r = float(np.corrcoef(x, y)[0, 1]); r2 = r**2
-    if r is not None and np.isfinite(r):
-        ax.legend(loc="best", frameon=False, title=f"相関係数 r = {r:.3f}／決定係数 r2 = {r2:.3f}")
-    else:
-        ax.legend(loc="best", frameon=False)
-    ax.set_xlabel(la if str(la).strip() else "横軸")
-    ax.set_ylabel(lb if str(lb).strip() else "縦軸")
-    ax.set_title(title if str(title).strip() else "散布図")
-    show_fig(fig, width_px)
-    st.caption(f"n = {len(x)}")
-    st.caption(f"相関係数 r = {fmt(r)}")
-    st.caption(f"決定係数 r2 = {fmt(r2)}")
-
 def flatten_columns(cols):
     def _normalize(c: str) -> str:
         return re.sub(r"\s+", "", str(c).strip())
@@ -225,7 +195,7 @@ def compose_label(caption, val_col, page_title):
             return str(s).strip()
     return "データ"
 
-# ===== 相関ユーティリティ（AI分析で使用） =====
+# ===== 相関ユーティリティ =====
 def strength_label(r: float) -> str:
     if r is None or not np.isfinite(r):
         return "判定不可"
@@ -235,16 +205,26 @@ def strength_label(r: float) -> str:
     if a >= 0.2: return "弱い"
     return "ほとんどない"
 
-def safe_pearson(x, y):
-    ok = np.isfinite(x) & np.isfinite(y)
-    if ok.sum() < 2 or np.nanstd(x[ok]) == 0 or np.nanstd(y[ok]) == 0:
-        return np.nan
-    return float(np.corrcoef(x[ok], y[ok])[0, 1])
+def corr_matrix_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """NaNを落としたうえで、列の分散が0のときはNaNにする相関行列（ピアソン）"""
+    if df.empty or df.shape[1] < 2:
+        return pd.DataFrame(index=df.columns, columns=df.columns, dtype=float)
+    ok = df.dropna(axis=0, how="any")
+    if ok.shape[0] < 2:
+        return pd.DataFrame(index=df.columns, columns=df.columns, dtype=float)
+    # 分散0列はNaN列に
+    std = ok.std(axis=0, ddof=0)
+    safe = ok.copy()
+    zero_cols = std[std == 0].index.tolist()
+    for c in zero_cols:
+        safe[c] = np.nan
+    return safe.corr(method="pearson")
 
-def safe_spearman(x, y):
-    xr = pd.Series(x).rank(method="average").to_numpy()
-    yr = pd.Series(y).rank(method="average").to_numpy()
-    return safe_pearson(xr, yr)
+def spearman_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or df.shape[1] < 2:
+        return pd.DataFrame(index=df.columns, columns=df.columns, dtype=float)
+    ranks = df.rank(method="average", na_option="keep")
+    return corr_matrix_safe(ranks)
 
 # -------------------- URL読み込み --------------------
 @st.cache_data(show_spinner=False)
@@ -438,44 +418,7 @@ if do_calc:
         st.session_state.calc = None
         st.stop()
 
-    # ===== 以下、2変数（A・B）に基づく従来の散布図と外れ値 =====
-    x0 = pd.to_numeric(merged["value_a"], errors="coerce")
-    y0 = pd.to_numeric(merged["value_b"], errors="coerce")
-    mask0 = x0.notna() & y0.notna()
-    x_all = x0[mask0].to_numpy()
-    y_all = y0[mask0].to_numpy()
-    pref_all = merged.loc[mask0, "pref"].astype(str).to_numpy()
-
-    # IQR外れ値（軸ごと）
-    mask_x_in = iqr_mask(x_all, 1.5)
-    mask_y_in = iqr_mask(y_all, 1.5)
-    mask_inlier = mask_x_in & mask_y_in
-    x_in = x_all[mask_inlier]
-    y_in = y_all[mask_inlier]
-
-    # 散布図（左右）
-    st.subheader("散布図（左：外れ値を含む／右：外れ値除外）")
-    col_l, col_r = st.columns(2)
-    with col_l:
-        draw_scatter_reg_with_metrics(x_all, y_all, label_a, label_b, "散布図（外れ値を含む）", SCATTER_WIDTH_PX)
-    with col_r:
-        draw_scatter_reg_with_metrics(x_in, y_in, label_a, label_b, "散布図（外れ値除外）", SCATTER_WIDTH_PX)
-
-    # 外れ値リスト（表示のみ）
-    outs_x = pref_all[~mask_x_in]
-    outs_y = pref_all[~mask_y_in]
-    st.subheader("外れ値（都道府県名）")
-    col_x, col_y = st.columns(2)
-    with col_x:
-        st.markdown("**X軸で外れ値**")
-        st.write("\n".join(map(str, outs_x)) if len(outs_x) else "なし")
-    with col_y:
-        st.markdown("**Y軸で外れ値**")
-        st.write("\n".join(map(str, outs_y)) if len(outs_y) else "なし")
-
-    st.markdown("---")
-
-    # ====== 散布図行列（2〜4変数対応） ======
+    # ===== 散布図行列用データ（2〜4変数）=====
     vals = merged[value_cols].apply(pd.to_numeric, errors="coerce")
     mask_all = vals.notna().all(axis=1)
     vals_all = vals.loc[mask_all]  # 全データ（欠損のある行は除く）
@@ -486,124 +429,158 @@ if do_calc:
         inlier_mask &= iqr_mask(vals_all[c].to_numpy(), 1.5)
     vals_in = vals_all.loc[inlier_mask]
 
+    # ===== 散布図行列（描画）=====
     st.subheader("散布図行列（全データ）")
     draw_scatter_matrix(vals_all, labels_all, "散布図行列（外れ値を含む）", width_px=860)
 
     st.subheader("散布図行列（外れ値除外）")
     draw_scatter_matrix(vals_in, labels_all, "散布図行列（外れ値除外）", width_px=860)
 
-    # ===== 計算結果を session_state に保存（AI分析用：A・Bの2変数）=====
+    # ====== 相関行列（Pearson/Spearman）を事前計算して session_state に格納 ======
+    pearson_all = corr_matrix_safe(vals_all)
+    pearson_in  = corr_matrix_safe(vals_in)
+    spear_all   = spearman_matrix(vals_all)
+
     st.session_state.calc = {
-        "x_all": x_all, "y_all": y_all, "x_in": x_in, "y_in": y_in,
-        "outs_x": outs_x, "outs_y": outs_y,
-        "label_a": label_a, "label_b": label_b
+        "labels": labels_all,
+        "value_cols": value_cols,
+        "vals_all": vals_all,
+        "vals_in": vals_in,
+        "pearson_all": pearson_all,
+        "pearson_in": pearson_in,
+        "spear_all": spear_all
     }
 
-# -------------------- AI分析（独立ボタン：常に画面下に表示） --------------------
+# -------------------- AI分析（散布図行列ベースの傾向要約） --------------------
 ai_disabled = ("calc" not in st.session_state) or (st.session_state.get("calc") is None)
 do_ai = st.button("AI分析", key="btn_ai", disabled=ai_disabled)
 
-if do_ai and not ai_disabled:
-    c = st.session_state.calc
-    x_all = c["x_all"]; y_all = c["y_all"]; x_in = c["x_in"]; y_in = c["y_in"]
-    outs_x = c["outs_x"]; outs_y = c["outs_y"]
-    label_a = c["label_a"]; label_b = c["label_b"]
+def top_pairs_from_matrix(mat: pd.DataFrame, labels: List[str], k: int = 5) -> List[Tuple[str, str, float]]:
+    out = []
+    if mat.empty:
+        return out
+    cols = list(mat.columns)
+    for i in range(len(cols)):
+        for j in range(i+1, len(cols)):
+            r = mat.iloc[i, j]
+            if pd.notna(r):
+                out.append((labels[i], labels[j], float(r)))
+    out.sort(key=lambda x: abs(x[2]), reverse=True)
+    return out[:k]
 
-    # 係数などを計算
-    r_all = safe_pearson(x_all, y_all)
-    r_in  = safe_pearson(x_in,  y_in)
-    r2_all = (r_all**2) if np.isfinite(r_all) else np.nan
-    r2_in  = (r_in**2)  if np.isfinite(r_in)  else np.nan
-    rho_all = safe_spearman(x_all, y_all)
+def summarize_global_tendencies(pear_all: pd.DataFrame, pear_in: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
+    """全体傾向・ハブ変数・外れ値依存の有無などを簡潔に要約"""
+    summary = {}
+    if pear_all.empty or pear_in.empty:
+        summary["overall"] = "相関の判定に十分なデータがありません。"
+        return summary
 
-    # ---- ここから：AIの総合コメント（評価対象の明記付き）----
-    def has_any(s, words):
-        t = str(s or "")
-        return any(w in t for w in words)
-
-    COMMON_DENOMS = ["人口","人","世帯","面積","県内総生産","GDP","生徒数","児童数","病床数","車両数"]
-    CAUSE_LIKE = ["支出","投資","施策","設備","普及率","導入率","供給","提供","価格","気温","降水","日照","所得","収入","賃金","教育","医師数","教員数"]
-    EFFECT_LIKE = ["件数","死亡率","事故","販売","売上","利用","満足度","待機児童","志願者","合格率","歩留","欠席","感染","犯罪","通報","受診","受給","離職"]
-
-    # 相関の強さ（外れ値除外を優先して判定）
-    basis_is_inlier = np.isfinite(r_in)
-    corr_for_label = r_in if basis_is_inlier else r_all
-    corr_strength = strength_label(corr_for_label)
-    corr_exists = (corr_strength not in ("ほとんどない", "判定不可"))
-    basis_label = "外れ値除外データ" if basis_is_inlier else "全データ（外れ値含む）"
-
-    # 疑似相関（規模効果/共通分母/外れ値駆動）
-    la, lb = str(label_a), str(label_b)
-    both_rate = (has_any(la, RATE_WORDS) and has_any(lb, RATE_WORDS))
-    both_total = (not has_any(la, RATE_WORDS) and not has_any(lb, RATE_WORDS))
-    share_denom = any((d in la) and (d in lb) for d in COMMON_DENOMS)
-
-    pseudo_flags = []
-    if both_total:
-        pseudo_flags.append("両方が“総数系”で、人口規模の大きさに引きずられて相関が出やすい（規模効果）")
-    if both_rate or share_denom:
-        pseudo_flags.append("両方が同じ分母（例：人口）に依存している可能性（共通分母）")
-    if np.isfinite(r_all) and np.isfinite(r_in) and (abs(r_all) - abs(r_in) >= 0.15):
-        pseudo_flags.append("外れ値が相関を大きく見せていた可能性")
-
-    # 因果の向きの仮説
-    cause_hint = None
-    if has_any(la, CAUSE_LIKE) and has_any(lb, EFFECT_LIKE):
-        cause_hint = f"『{label_a} → {label_b}』の因果がありそう（仮説）"
-    elif has_any(lb, CAUSE_LIKE) and has_any(la, EFFECT_LIKE):
-        cause_hint = f"『{label_b} → {label_a}』の因果がありそう（仮説）"
-
-    # 総合判定メッセージ
-    if not corr_exists:
-        relation = "相関はほぼ見られません。"
-        reason = "相関係数が小さく、順位相関も弱めです。"
+    # 全体の符号傾向
+    tril_idx = np.tril_indices(len(labels), k=-1)
+    arr_all = pear_all.to_numpy()[tril_idx]
+    pos_share = np.nanmean(arr_all > 0)
+    neg_share = np.nanmean(arr_all < 0)
+    if pos_share >= 0.65:
+        overall = "多くの組み合わせで**正の関係**が見られます。"
+    elif neg_share >= 0.65:
+        overall = "多くの組み合わせで**負の関係**が見られます。"
     else:
-        if pseudo_flags:
-            relation = "相関は確認できますが、疑似相関の可能性が高いです。"
-            reason = "・" + "\n・".join(pseudo_flags)
-        elif cause_hint:
-            relation = "相関があり、因果の可能性も示唆されます（仮説）。"
-            reason = cause_hint
-        else:
-            relation = "相関は確認できますが、因果かどうかはこのデータだけでは判断できません。"
-            reason = "追加のデータや検証が必要です。"
+        overall = "正負が混在しており、単一方向の傾向は限定的です。"
 
-    # ★最上部に強調表示（AIの総合コメント）— 評価対象を明示
-    st.success(f"**AI総合コメント（評価対象：{basis_label}）**：{relation}")
-    st.markdown("**理由（要約）**\n\n" + reason)
+    # ハブ変数（他と強くつながる）
+    hub_msg = "ハブ的な変数は明確ではありません。"
+    try:
+        deg = {}
+        for i, a in enumerate(labels):
+            cnt = 0
+            for j, b in enumerate(labels):
+                if j <= i: 
+                    continue
+                r = pear_in.iloc[i, j]
+                if pd.notna(r) and abs(r) >= 0.4:  # 中程度以上
+                    cnt += 1
+            deg[a] = cnt
+        if deg:
+            m = max(deg.values())
+            hubs = [k for k, v in deg.items() if v == m and m > 0]
+            if hubs:
+                hub_msg = "次の変数が**他の変数と中程度以上の関係**を多く持っています： " + "、".join(hubs)
+    except Exception:
+        pass
 
-    # 以下、数値の内訳
-    st.subheader("AI分析")
+    # 外れ値依存（全データ→除外で大きく低下）
+    drop_pairs = []
+    for i in range(len(labels)):
+        for j in range(i+1, len(labels)):
+            r_all = pear_all.iloc[i, j]
+            r_in  = pear_in.iloc[i, j]
+            if pd.notna(r_all) and pd.notna(r_in):
+                if abs(r_all) - abs(r_in) >= 0.15:
+                    drop_pairs.append((labels[i], labels[j]))
+    if drop_pairs:
+        out_msg = "外れ値の影響で**相関が過大**に見えていた可能性のある組み合わせ： " + "、".join([f"{a}×{b}" for a, b in drop_pairs])
+    else:
+        out_msg = "外れ値除外後も関係の強さに**大きな変化は見られません**。"
+
+    summary["overall"] = overall
+    summary["hub"] = hub_msg
+    summary["outlier_depend"] = out_msg
+    return summary
+
+if do_ai and not ai_disabled:
+    calc = st.session_state.calc
+    labels_all = calc["labels"]
+    vals_all   = calc["vals_all"]
+    vals_in    = calc["vals_in"]
+    pear_all   = calc["pearson_all"]
+    pear_in    = calc["pearson_in"]
+    spear_all  = calc["spear_all"]
+
+    # トップの組み合わせ（全データ／外れ値除外）
+    top_all = top_pairs_from_matrix(pear_all, labels_all, k=5)
+    top_in  = top_pairs_from_matrix(pear_in,  labels_all, k=5)
+
+    # 全体傾向サマリー
+    summ = summarize_global_tendencies(pear_all, pear_in, labels_all)
+
+    # === 出力 ===
+    st.success("**AI総合コメント（散布図行列の分析）**：全体の関係性を要約しました。")
+
+    st.subheader("AI分析（要点）")
     st.markdown(f"""
-- サンプル数: 全データ **n={len(x_all)}** ／ 外れ値除外 **n={len(x_in)}**
-- ピアソン相関: 全データ **r={r_all if np.isfinite(r_all) else float('nan'):.3f}（{strength_label(r_all)}）** ／ 外れ値除外 **r={r_in if np.isfinite(r_in) else float('nan'):.3f}（{strength_label(r_in)}）**
-- 決定係数: 全データ **r²={r2_all if np.isfinite(r2_all) else float('nan'):.3f}** ／ 外れ値除外 **r²={r2_in if np.isfinite(r2_in) else float('nan'):.3f}**
-- スピアマン順位相関（全データ）: **ρ={rho_all if np.isfinite(rho_all) else float('nan'):.3f}**
-- 外れ値件数: X軸 **{len(outs_x)}件** ／ Y軸 **{len(outs_y)}件**
+- **サンプル数**：全データ **n={len(vals_all)}** ／ 外れ値除外 **n={len(vals_in)}**
+- **全体傾向**：{summ.get("overall","")}
+- **ハブ的な変数**：{summ.get("hub","")}
+- **外れ値の影響**：{summ.get("outlier_depend","")}
 """)
 
-    st.info(
-        "**関係のヒント**\n"
-        "- 相関は「二つの項目が一緒に増減する傾向」を示します。**原因と結果を直接示すものではありません。**\n"
-        "- 疑似相関は、人口や面積など**共通の要因**が両方に効いて「関係があるように見える」状態です。\n"
-        "- 因果を確かめるには、時系列の比較や条件をそろえた検証など、**追加の分析**が必要です。"
-    )
+    def fmt_line(triple):
+        a, b, r = triple
+        return f"- {a} × {b}： r={r:+.3f}（{strength_label(r)}）"
 
-    # ======== 補足（IQR法 と スピアマン順位相関の説明＋例）========
+    st.markdown("#### 強い／目立つ組み合わせ（全データ・上位）")
+    if top_all:
+        st.markdown("\n".join(fmt_line(t) for t in top_all))
+    else:
+        st.info("十分な組み合わせがありません。")
+
+    st.markdown("#### 強い／目立つ組み合わせ（外れ値除外・上位）")
+    if top_in:
+        st.markdown("\n".join(fmt_line(t) for t in top_in))
+    else:
+        st.info("十分な組み合わせがありません。")
+
     st.markdown("---")
     st.markdown(
         "#### 外れ値の定義（IQR法）\n"
         "四分位範囲 IQR = Q3 − Q1 とし、**下限 = Q1 − 1.5×IQR、上限 = Q3 + 1.5×IQR** を超える値を外れ値とします。"
-        " 本ツールでは、散布図の「外れ値除外」では **x または y のどちらかが外れ値** に該当した都道府県を除いています。"
+        " 本ツールの「外れ値除外」の散布図行列では、**いずれかの列で外れ値に該当した行**を除いています。"
     )
     st.markdown(
         "#### スピアマン順位相関とは\n"
         "データの**値そのもの**ではなく、**順位（大小関係）**に置き換えて相関の強さを調べる方法です（記号は ρ）。\n"
         "- **外れ値の影響を受けにくい**、分布が歪んでいても使いやすい。\n"
-        "- 直線関係でなくても、**単調な関係**（増えるとだいたい増える／減る）があるかを捉えられます。\n"
-        "- 値の範囲は **−1 〜 +1**（±1 に近いほど関係が強い）。\n\n"
-        "**例**：国語と数学のテストで、点数は違っても**生徒の順位が同じ**なら ρ は高くなります。\n"
-        "・国語の順位: 1位, 2位, 3位, 4位, 5位\n"
-        "・数学の順位: 1位, 2位, 3位, 4位, 5位\n"
-        "→ この場合、スピアマン順位相関は **1.0（完全一致）** になります。"
+        "- 直線関係でなくても、**単調な関係**を捉えられます。\n"
+        "- 値の範囲は **−1 〜 +1**（±1 に近いほど関係が強い）。\n"
+        "**例**：国語と数学で生徒の順位がほぼ同じなら ρ は高くなります。"
     )
