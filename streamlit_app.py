@@ -312,6 +312,7 @@ url_b = st.text_input("項目B URL",
 url_c = st.text_input("項目C URL（任意）", placeholder="https://todo-ran.com/t/kiji/ZZZZZ")
 url_d = st.text_input("項目D URL（任意）", placeholder="https://todo-ran.com/t/kiji/WWWWW")
 
+allow_rate = st.checkbox("割合（率・％・当たり）も対象にする", value=True)
 
 # クリア関数（on_click）
 def clear_urls():
