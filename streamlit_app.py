@@ -497,7 +497,7 @@ if do_calc:
 
     # セッションに保存（AI分析・再描画用）
     st.session_state.calc = {
-        "labels": labels_unique,   # ← 表示と一致させる
+        "labels": labels_unique,   # 表示と一致させる
         "vals_all": vals_all
     }
 
@@ -531,9 +531,6 @@ def pair_list_from_matrix(df: pd.DataFrame, labels: List[str]) -> List[Tuple[str
             if pd.notna(r):
                 out.append((labels[i], labels[j], float(r)))
     return out
-
-def top_pairs(pairs: List[Tuple[str, str, float]], k: int = 5) -> List[Tuple[str, str, float]]:
-    return sorted(pairs, key=lambda x: abs(x[2]), reverse=True)[:k]
 
 def summarize_global_tendencies(df: pd.DataFrame, labels: List[str]) -> Dict[str, str]:
     """全体傾向・ハブ変数などを簡潔に要約（全データのみ）"""
@@ -583,23 +580,52 @@ def short_label_map(orig_labels: List[str]) -> Dict[str, str]:
     shorts = short_names(len(orig_labels))
     return {orig: s for orig, s in zip(orig_labels, shorts)}
 
-def interpret_pair(a: str, b: str, r: float) -> str:
-    """高校生向けに具体的な読み取り文"""
-    trend = "一緒に増える傾向" if r > 0 else "片方が増えるともう片方が減る傾向"
-    strength = strength_label(r)
-    return f"- {a} と {b}： r={r:+.3f}（{strength}）。おおまかに見ると**{trend}**が見られます。"
+# —— データに合わせた提案を生成（キーワード＋相関パターンに基づく） ——
+def make_advice(labels: List[str], df_vals: pd.DataFrame) -> List[str]:
+    tips = set()
+    L = " ".join([str(x) for x in labels])
 
-def make_advice(labels: List[str]) -> List[str]:
-    """さらに面白い関係を探すための追加データの提案（例）"""
-    tips = [
-        "家庭の**可処分所得**や**教育支出**：学習率や合格者数と関係が強まる可能性。",
-        "**学習塾通塾率**・**オンライン学習利用率**：学校外学習に関する指標との結び付き確認。",
-        "**家庭内PC・タブレット普及**と**回線速度**：ICT関連の指標との差を説明できる可能性。",
-        "**母数（在籍者数・卒業者数）**：規模効果を補正して比較可能に。",
-        "**運動施設数・運動場所面積**：運動部関連の指標の地域差要因に接近。",
-        "**通学時間**や**都市度（人口密度など）**：複数指標に共通する地域要因を切り分け。"
-    ]
-    return tips
+    def has(words):  # ラベルに含まれるか
+        return any(w in L for w in words)
+
+    # 1) 規模効果（総数・件数・合格者数などがあるとき）
+    if has(["合計","総数","件数","人数","人口","合格者","販売額","生産額","生産量"]):
+        tips.add("人口や在籍者数などの**母数で割った値**（1人当たり等）を追加して規模効果を補正")
+
+    # 2) 率・割合系があるとき
+    if has(["率","割合","比率","％","当たり"]):
+        tips.add("**分子と分母の絶対数**（件数・人口）を追加して割合の背景を確認")
+
+    # 3) 学習・進学系
+    if has(["学習","進学","合格","教育","大学"]):
+        tips.add("**可処分所得**や**教育支出**を追加して学習関連の地域差の要因を探る")
+
+    # 4) ICT系
+    if has(["ICT","スマホ","ネット","PC","端末"]):
+        tips.add("**回線速度**・**端末普及率**・**学校の端末整備率**などICT環境の指標を追加")
+
+    # 5) 運動・体育系
+    if has(["運動","体育","スポーツ","部活動"]):
+        tips.add("**運動施設数**や**一人当たり運動場所面積**、**平均気温/降水量**など環境指標を追加")
+
+    # 6) 都市度・アクセス系
+    if has(["人口密度","都市","東京都","大都市"]):
+        tips.add("**人口密度**や**都市圏ダミー**を追加して都市度の影響を分離")
+
+    # 7) 相関パターンを使った提案
+    mat = corr_matrix_safe(df_vals)
+    if not mat.empty and mat.shape[0] >= 2:
+        tril = mat.to_numpy()[np.tril_indices(len(mat), k=-1)]
+        tril = tril[~np.isnan(tril)]
+        if tril.size:
+            # 正の相関が多い → 共通の第三要因を疑う
+            if (tril > 0).mean() >= 0.65:
+                tips.add("複数の指標に共通して効く**第三の要因**（人口密度・所得など）を追加")
+            # 強い負の相関が目立つ → 年齢構成や昼夜間人口比を提案
+            if np.nanmax(np.abs(tril)) >= 0.7 and (tril < 0).mean() > 0.3:
+                tips.add("**年齢構成（高齢化率）**や**昼夜間人口比**を追加して負の関係の背景を確認")
+
+    return sorted(tips)
 
 # ======= 分析結果の表示 =======
 if st.session_state.get("show_ai_result") and not ai_disabled:
@@ -632,16 +658,23 @@ if st.session_state.get("show_ai_result") and not ai_disabled:
     if strong:
         st.markdown("### 目立って**強い**関係（例）")
         st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in strong))
-        st.markdown("\n".join(interpret_pair(a,b,r) for a,b,r in strong))
+        # 読み取りの一言（高校生向け）
+        for a,b,r in strong:
+            trend = "一緒に増える傾向" if r > 0 else "片方が増えるともう片方が減る傾向"
+            st.markdown(f"- {a} と {b}： r={r:+.3f}（{strength_label(r)}）。おおまかに見ると**{trend}**が見られます。")
+
     if medium:
         st.markdown("### **中程度**の関係（例）")
         st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in medium))
         st.caption("※ 中程度は、他の要因の影響も考えられるので、追加データで裏取りすると良いです。")
+
     if weak:
         st.markdown("### **ほとんど関係がない**組み合わせ（例）")
         st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in weak))
         st.caption("※ 関係が弱いのは、母数（人口など）の違いや、測っている内容が直接結びつかないためと考えられます。")
 
-
-st.markdown("### さらに集めるとよいデータの提案")
-st.markdown("\n".join(f"- {tip}" for tip in make_advice(labels_all)))
+    # データに合わせた追加収集の提案
+    advice_list = make_advice(labels_all, vals_all)
+    if advice_list:
+        st.markdown("### さらに集めるとよいデータの提案")
+        st.markdown("\n".join(f"- {t}" for t in advice_list))
