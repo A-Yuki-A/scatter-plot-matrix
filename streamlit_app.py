@@ -318,6 +318,8 @@ allow_rate = st.checkbox("割合（率・％・当たり）も対象にする", 
 def clear_urls():
     st.session_state["url_a"] = ""
     st.session_state["url_b"] = ""
+    st.session_state["url_c"] = ""
+    st.session_state["url_d"] = ""
     st.session_state.pop("calc", None)
     st.session_state["show_ai_result"] = False
     st.rerun()
