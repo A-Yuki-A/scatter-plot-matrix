@@ -302,17 +302,16 @@ def load_todoran_table(url: str, allow_rate: bool = True):
     return pd.DataFrame(columns=["pref","value"]), "データ"
 
 # -------------------- UI（入力とボタン） --------------------
-url_a = st.text_input("X軸（説明変数）URL",
+url_a = st.text_input("項目A URL",
                       placeholder="https://todo-ran.com/t/kiji/XXXXX",
                       key="url_a")
-url_b = st.text_input("Y軸（目的変数）URL",
+url_b = st.text_input("項目B URL",
                       placeholder="https://todo-ran.com/t/kiji/YYYYY",
                       key="url_b")
 # 追加URL（任意）
-url_c = st.text_input("3つ目のURL（任意）", placeholder="https://todo-ran.com/t/kiji/ZZZZZ")
-url_d = st.text_input("4つ目のURL（任意）", placeholder="https://todo-ran.com/t/kiji/WWWWW")
+url_c = st.text_input("項目C URL（任意）", placeholder="https://todo-ran.com/t/kiji/ZZZZZ")
+url_d = st.text_input("項目D URL（任意）", placeholder="https://todo-ran.com/t/kiji/WWWWW")
 
-allow_rate = st.checkbox("割合（率・％・当たり）も対象にする", value=True)
 
 # クリア関数（on_click）
 def clear_urls():
