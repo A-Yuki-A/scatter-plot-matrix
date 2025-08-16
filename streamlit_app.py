@@ -4,7 +4,7 @@
 # ・「偏差値」や「順位」列は除外
 # ・グレースケールデザイン／中央寄せ／アクセシビリティ配慮／タイトル余白修正
 # ・AI分析（散布図行列から読み取れる傾向を具体的に記述／追加であると良いデータも提案）
-# ・「クリア」ボタンで2つのURLと計算結果をリセット（on_click方式）
+# ・「クリア」ボタンでA〜DのURLと計算結果をリセット（on_click方式）
 # ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データのみ）を描画
 # ・右端に各変数の箱ひげ図を表示／上三角に r を表示（間隔は狭め）
 # ・「結合後のデータ（共通の都道府県のみ）」をCSV保存可能
@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 from pandas.api.types import is_scalar
 from pathlib import Path
 
-# === フォント設定 ===
+# === フォント設定（日本語フォントがあれば使用） ===
 fp = Path("fonts/SourceHanCodeJP-Regular.otf")
 if fp.exists():
     fm.fontManager.addfont(str(fp))
@@ -121,11 +121,11 @@ if "url_a" not in st.session_state:
 if "url_b" not in st.session_state:
     st.session_state["url_b"] = ""
 if "url_c" not in st.session_state:
-    st.session_state["url_c"] = ""   # 追加
+    st.session_state["url_c"] = ""
 if "url_d" not in st.session_state:
-    st.session_state["url_d"] = ""   # 追加
+    st.session_state["url_d"] = ""
 if "show_ai_result" not in st.session_state:
-    st.session_state["show_ai_result"] = False
+    st.session_state["show_ai_result"] = False  # 分析結果の表示制御
 
 # -------------------- ユーティリティ --------------------
 def show_fig(fig, width_px: int):
@@ -312,13 +312,15 @@ url_a = st.text_input("項目A URL",
 url_b = st.text_input("項目B URL",
                       placeholder="https://todo-ran.com/t/kiji/YYYYY",
                       key="url_b")
+# 追加URL（任意）
 url_c = st.text_input("項目C URL（任意）",
                       placeholder="https://todo-ran.com/t/kiji/ZZZZZ",
-                      key="url_c")  # ← これが重要
+                      key="url_c")
 url_d = st.text_input("項目D URL（任意）",
                       placeholder="https://todo-ran.com/t/kiji/WWWWW",
-                      key="url_d")  # ← これが重要
+                      key="url_d")
 
+# 割合（率・％・当たり）も対象にするかどうか
 allow_rate = st.checkbox("割合（率・％・当たり）も対象にする", value=True)
 
 # クリア関数（on_click）
@@ -333,7 +335,6 @@ def clear_urls():
 
 col_calc, col_clear = st.columns([2, 1])
 with col_calc:
-    # ★ ボタン名を変更
     do_calc = st.button("散布図行列を作成する", key="btn_calc", type="primary")
 with col_clear:
     st.button("クリア", key="btn_clear", help="入力中のURLを消去します", on_click=clear_urls)
@@ -407,7 +408,7 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
         if i == 0:
             bx.set_title("箱ひげ")
 
-    # ★ 間隔を狭める
+    # 間隔を狭める
     fig.subplots_adjust(left=0.07, right=0.97, top=0.90, bottom=0.08, wspace=0.06, hspace=0.06)
 
     show_fig(fig, width_px)
@@ -420,7 +421,7 @@ def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
 if do_calc:
     st.session_state["show_ai_result"] = False  # 新規作成時は分析表示を一旦オフ
     if not url_a or not url_b:
-        st.error("少なくとも2つのURLを入力してください。")
+        st.error("少なくとも2つのURL（項目A・B）を入力してください。")
         st.stop()
     try:
         df_a, label_a = load_todoran_table(url_a, allow_rate=allow_rate)
@@ -454,12 +455,26 @@ if do_calc:
         merged = pd.merge(merged, dfx, on="pref", how="inner")
         labels_all.append(lblx)
 
+    # ▼ 表示名の正規化＆一意化（PyArrowの重複列名エラー対策）
+    def _norm_label(s):
+        s = (s or "データ")
+        s = re.sub(r"\s+", " ", str(s)).strip()
+        return s if s else "データ"
+    labels_norm = [_norm_label(x) for x in labels_all]
+    labels_unique = make_unique(labels_norm)
+
     # 表示用に列名を置き換え
     value_cols = [c for c in merged.columns if c.startswith("value")]
     display_cols = {"pref": "都道府県"}
-    for c, lab in zip(value_cols, labels_all):
+    for c, lab in zip(value_cols, labels_unique):
         display_cols[c] = lab
+
     display_df2 = merged.rename(columns=display_cols)
+
+    # さらに保険：都道府県以外で重複が残っていたら一意化
+    cols = list(display_df2.columns)
+    cols[1:] = make_unique(cols[1:])
+    display_df2.columns = cols
 
     st.subheader("結合後のデータ（共通の都道府県のみ・最大4変数）")
     st.dataframe(display_df2, use_container_width=True, hide_index=True)
@@ -482,7 +497,7 @@ if do_calc:
 
     # セッションに保存（AI分析・再描画用）
     st.session_state.calc = {
-        "labels": labels_all,
+        "labels": labels_unique,   # ← 表示と一致させる
         "vals_all": vals_all
     }
 
@@ -569,21 +584,20 @@ def short_label_map(orig_labels: List[str]) -> Dict[str, str]:
     return {orig: s for orig, s in zip(orig_labels, shorts)}
 
 def interpret_pair(a: str, b: str, r: float) -> str:
-    """高校生向けに具体的な読み取り文を付ける"""
+    """高校生向けに具体的な読み取り文"""
     trend = "一緒に増える傾向" if r > 0 else "片方が増えるともう片方が減る傾向"
     strength = strength_label(r)
     return f"- {a} と {b}： r={r:+.3f}（{strength}）。おおまかに見ると**{trend}**が見られます。"
 
 def make_advice(labels: List[str]) -> List[str]:
-    """さらに面白い関係を探すための追加データの提案（教育・ICT・進学・運動文脈）"""
+    """さらに面白い関係を探すための追加データの提案（例）"""
     tips = [
-        "家庭の**可処分所得**や**教育支出**：学習率や合格者数と関係が強まるかもしれません。",
-        "**学習塾通塾率**・**オンライン学習利用率**：学校外学習率（A）との関連が詳しく見られます。",
-        "**端末の世帯普及状況**（家庭内PC・タブレット）と**ネット回線速度**：スマホ所有率（B）と学習率（A）の違いを説明できる可能性。",
-        "**在籍者数（母数）**や**高校卒業者数**：合格者数（C）の規模効果（人口が多いほど合格者が多い）を補正して比較できます。",
-        "**体育・運動環境の整備指標**（施設数、1人あたり運動場所面積、部活動の活動時間）：" \
-        "運動部参加率（D）の地域差の背景を探れます。",
-        "**通学時間**や**都市度指標（人口密度、都市圏ダミー）**：A/B/Dに共通して効く地域要因を切り分けられます。"
+        "家庭の**可処分所得**や**教育支出**：学習率や合格者数と関係が強まる可能性。",
+        "**学習塾通塾率**・**オンライン学習利用率**：学校外学習に関する指標との結び付き確認。",
+        "**家庭内PC・タブレット普及**と**回線速度**：ICT関連の指標との差を説明できる可能性。",
+        "**母数（在籍者数・卒業者数）**：規模効果を補正して比較可能に。",
+        "**運動施設数・運動場所面積**：運動部関連の指標の地域差要因に接近。",
+        "**通学時間**や**都市度（人口密度など）**：複数指標に共通する地域要因を切り分け。"
     ]
     return tips
 
@@ -596,7 +610,7 @@ if st.session_state.get("show_ai_result") and not ai_disabled:
     pairs = pair_list_from_matrix(vals_all, labels_all)
     to_short = short_label_map(labels_all)
 
-    # 上位の強い/弱い組み合わせ
+    # 強さ別に仕分け
     pairs_sorted = sorted(pairs, key=lambda x: abs(x[2]), reverse=True)
     strong = [p for p in pairs_sorted if abs(p[2]) >= 0.7][:5]
     medium = [p for p in pairs_sorted if 0.4 <= abs(p[2]) < 0.7][:5]
@@ -605,9 +619,8 @@ if st.session_state.get("show_ai_result") and not ai_disabled:
     # 全体傾向・ハブ
     summ = summarize_global_tendencies(vals_all, labels_all)
 
-    # ===== 出力 =====
+    # 出力
     st.success("**結果解説**：散布図行列を総合的に読み取り、具体的な傾向を示します。")
-
     st.markdown(f"- **サンプル数**：n = {len(vals_all)}")
     st.markdown(f"- **全体傾向**：{summ.get('overall','')}")
     st.markdown(f"- **ハブ的な変数**：{summ.get('hub','')}")
@@ -629,3 +642,6 @@ if st.session_state.get("show_ai_result") and not ai_disabled:
         st.markdown("\n".join(f"- {fmt_with_short(a,b,r)}" for a,b,r in weak))
         st.caption("※ 関係が弱いのは、母数（人口など）の違いや、測っている内容が直接結びつかないためと考えられます。")
 
+
+st.markdown("### さらに集めるとよいデータの提案")
+st.markdown("\n".join(f"- {tip}" for tip in make_advice(labels_all)))
