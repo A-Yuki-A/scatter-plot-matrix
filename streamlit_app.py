@@ -120,8 +120,12 @@ if "url_a" not in st.session_state:
     st.session_state["url_a"] = ""
 if "url_b" not in st.session_state:
     st.session_state["url_b"] = ""
+if "url_c" not in st.session_state:
+    st.session_state["url_c"] = ""   # 追加
+if "url_d" not in st.session_state:
+    st.session_state["url_d"] = ""   # 追加
 if "show_ai_result" not in st.session_state:
-    st.session_state["show_ai_result"] = False  # 分析結果の表示制御
+    st.session_state["show_ai_result"] = False
 
 # -------------------- ユーティリティ --------------------
 def show_fig(fig, width_px: int):
@@ -308,9 +312,12 @@ url_a = st.text_input("項目A URL",
 url_b = st.text_input("項目B URL",
                       placeholder="https://todo-ran.com/t/kiji/YYYYY",
                       key="url_b")
-# 追加URL（任意）
-url_c = st.text_input("項目C URL（任意）", placeholder="https://todo-ran.com/t/kiji/ZZZZZ")
-url_d = st.text_input("項目D URL（任意）", placeholder="https://todo-ran.com/t/kiji/WWWWW")
+url_c = st.text_input("項目C URL（任意）",
+                      placeholder="https://todo-ran.com/t/kiji/ZZZZZ",
+                      key="url_c")  # ← これが重要
+url_d = st.text_input("項目D URL（任意）",
+                      placeholder="https://todo-ran.com/t/kiji/WWWWW",
+                      key="url_d")  # ← これが重要
 
 allow_rate = st.checkbox("割合（率・％・当たり）も対象にする", value=True)
 
@@ -580,7 +587,6 @@ def make_advice(labels: List[str]) -> List[str]:
     ]
     return tips
 
-# ======= 分析結果の表示 =======
 # ======= 分析結果の表示 =======
 if st.session_state.get("show_ai_result") and not ai_disabled:
     labels_all = st.session_state.calc["labels"]
