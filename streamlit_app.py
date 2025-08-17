@@ -6,7 +6,7 @@
 # ・AI分析（散布図行列から読み取れる傾向を具体的に記述／追加であると良いデータも提案）
 # ・「クリア」ボタンでA〜DのURLと計算結果をリセット（on_click方式）
 # ・URLを最大4本まで受け取り、共通の都道府県で結合→散布図行列（全データのみ）を描画
-# ・右端に各変数の箱ひげ図を表示／上三角に r を表示（間隔は狭め）
+# ・右端に各変数の箱ひげ図を表示
 # ・「結合後のデータ（共通の都道府県のみ）」をCSV保存可能
 
 import io
@@ -344,12 +344,13 @@ def short_names(n: int) -> List[str]:
     base = ["A", "B", "C", "D"]
     return base[:n]
 
-# ===== 散布図行列 + 右端箱ひげ + 上三角r（間隔を狭める） =====
+# ===== 散布図行列 + 右端箱ひげ（間隔を狭める） =====
 def draw_matrix_with_box_and_r(df_vals: pd.DataFrame, orig_labels: List[str],
                                title: str, width_px: int = 980):
     """
     n行 × (n+1)列のグリッド：左n×nが散布図行列（対角はヒスト）、
-    右端（列n）は各行の箱ひげ図。上三角にPearson rを表示。
+    右端（列n）は各行の箱ひげ図。
+    上三角にPearson rを表示。
     軸ラベルは A/B/C/D。図下に対応表を表示。間隔は詰める。
     """
     if df_vals.shape[1] < 2:
@@ -524,7 +525,7 @@ if do_calc:
 # ========== ここで「常に」散布図行列を表示 ==========
 # → AI分析ボタンを押しても消えない（セッションにあるデータで再描画）
 if st.session_state.get("calc"):
-    st.subheader("散布図行列（右端に箱ひげ図・上三角に r）")
+    st.subheader("散布図行列（+箱ひげ図）")
     draw_matrix_with_box_and_r(
         st.session_state.calc["vals_all"],
         st.session_state.calc["labels"],
