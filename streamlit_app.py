@@ -493,7 +493,27 @@ if do_calc:
         st.stop()
 
     # 散布図行列用データ
+    # 散布図行列用データ
     vals_all = merged[value_cols].apply(pd.to_numeric, errors="coerce").dropna(axis=0, how="any")
+
+    # ▼ 「処理に必要なデータ」を表で表示（欠損行を除外済みの数値データ）
+    #    都道府県列を付け、列名はA/B/C/D対応と同じ表示名にそろえる
+    needed_df = pd.concat([merged.loc[vals_all.index, ["pref"]], vals_all], axis=1).copy()
+    rename_map_needed = {"pref": "都道府県"}
+    for c, lab in zip(vals_all.columns.tolist(), labels_unique):
+        rename_map_needed[c] = lab
+    needed_df = needed_df.rename(columns=rename_map_needed)
+
+    st.subheader("処理に必要なデータ（欠損行を除外・散布図行列に使用）")
+    st.dataframe(needed_df, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "処理用データをCSVで保存",
+        needed_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="processed_for_matrix.csv",
+        mime="text/csv"
+    )
+
 
     # セッションに保存（AI分析・再描画用）
     st.session_state.calc = {
