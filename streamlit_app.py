@@ -37,7 +37,7 @@ else:
             pass
 plt.rcParams["axes.unicode_minus"] = False
 
-st.set_page_config(page_title="CorrGraph", layout="wide")
+st.set_page_config(page_title="Scatterplot Matrix", layout="wide")
 
 # タイトルの上に余白を追加
 st.markdown("""
@@ -46,7 +46,7 @@ h1 { margin-top: 2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("CorrGraph")
+st.title("Scatterplot Matrix")
 st.write("とどランの **各ランキング記事のURL** を2〜4つ貼り付けてください。")
 
 # ====== UIテーマ（グレースケール＆アクセシビリティ） ======
